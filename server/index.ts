@@ -809,8 +809,14 @@ app.post("/api/chat", async (req, res) => {
 });
 
 // 启动服务器
-app.listen(PORT, () => {
-  console.log(`
+async function startServer() {
+  try {
+    // 等待数据库初始化
+    await db.dbReady;
+    console.log("[DB] 数据库初始化完成");
+    
+    app.listen(PORT, () => {
+      console.log(`
 ╔════════════════════════════════════════════╗
 ║                                            ║
 ║     ◉ API 服务器已启动                      ║
@@ -819,5 +825,12 @@ app.listen(PORT, () => {
 ║     数据库: SQLite (data/chat.db)          ║
 ║                                            ║
 ╚════════════════════════════════════════════╝
-  `);
-});
+      `);
+    });
+  } catch (error) {
+    console.error("[Server] 启动失败:", error);
+    process.exit(1);
+  }
+}
+
+startServer();
