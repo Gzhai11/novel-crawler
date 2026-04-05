@@ -85,9 +85,17 @@ async function fetchPage(url: string, retryCount = 3): Promise<FetchResult> {
   const browser = await getBrowser();
   let lastError: Error | null = null;
   
+  // User-Agent 池
+  const userAgents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+  ];
+  
   for (let i = 0; i < retryCount; i++) {
     const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      userAgent: userAgents[Math.floor(Math.random() * userAgents.length)]
     });
     const page = await context.newPage();
     
@@ -98,8 +106,34 @@ async function fetchPage(url: string, retryCount = 3): Promise<FetchResult> {
       // 访问页面
       const response = await page.goto(url, { waitUntil: 'domcontentloaded' });
       
+      // 检测验证码
+      const hasCaptcha = await page.$('.captcha, #captcha, .verify-code, .geetest');
+      if (hasCaptcha) {
+        console.log(`[Crawler] 检测到验证码，等待处理...`);
+        await page.waitForTimeout(5000);
+      }
+      
       // 等待主要内容加载
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(1000 + Math.random() * 1000);
+      
+      // 尝试展开抽屉式加载
+      try {
+        const expandBtn = await page.$('.load-more, .expand, .show-all, [class*="more"]:visible');
+        if (expandBtn) {
+          for (let j = 0; j < 5; j++) {
+            await expandBtn.click().catch(() => {});
+            await page.waitForTimeout(500);
+          }
+        }
+      } catch (e) {
+        // 忽略展开错误
+      }
+      
+      // 滚动到底部触发懒加载
+      await page.evaluate(() => {
+        window.scrollTo(0, document.body.scrollHeight);
+      }).catch(() => {});
+      await page.waitForTimeout(500);
       
       // 获取HTML
       const html = await page.content();
@@ -110,8 +144,11 @@ async function fetchPage(url: string, retryCount = 3): Promise<FetchResult> {
     } catch (error: any) {
       lastError = error;
       console.error(`[Crawler] 第 ${i + 1} 次尝试失败:`, error.message);
+      
+      // 指数退避
       if (i < retryCount - 1) {
-        await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+        const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+        await new Promise(r => setTimeout(r, delay));
       }
     } finally {
       await context.close();
@@ -393,17 +430,82 @@ export async function analyzeNovelPage(url: string, onProgress?: ProgressCallbac
 /**
  * 爬取指定范围的章节内容
  */
+// 断点续爬：保存进度到文件
+const PROGRESS_FILE = '/tmp/novels/.crawl_progress.json';
+
+function saveProgress(novelTitle: string, chapters: Chapter[]) {
+  const progressDir = path.dirname(PROGRESS_FILE);
+  if (!fs.existsSync(progressDir)) {
+    fs.mkdirSync(progressDir, { recursive: true });
+  }
+  const progressData = {
+    novelTitle,
+    chapters: chapters.map(c => ({
+      index: c.index,
+      title: c.title,
+      url: c.url,
+      content: c.content,
+      wordCount: c.wordCount
+    })),
+    savedAt: new Date().toISOString()
+  };
+  fs.writeFileSync(PROGRESS_FILE, JSON.stringify(progressData, null, 2));
+}
+
+function loadProgress(novelTitle: string): Chapter[] | null {
+  try {
+    if (!fs.existsSync(PROGRESS_FILE)) return null;
+    const data = JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf-8'));
+    if (data.novelTitle === novelTitle) {
+      return data.chapters;
+    }
+  } catch (e) {
+    // 忽略错误
+  }
+  return null;
+}
+
 export async function crawlChapters(
   chapters: Chapter[],
   startIndex: number,
   endIndex: number,
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  novelTitle?: string
 ): Promise<Chapter[]> {
   const results: Chapter[] = [];
   const targetChapters = chapters.slice(startIndex, endIndex + 1);
   
+  // 断点续爬：检查是否有已爬取的进度
+  let skipCount = 0;
+  if (novelTitle) {
+    const savedProgress = loadProgress(novelTitle);
+    if (savedProgress) {
+      for (const saved of savedProgress) {
+        if (saved.content && !saved.content.includes('[爬取失败]')) {
+          const idx = targetChapters.findIndex(c => c.url === saved.url);
+          if (idx >= 0) {
+            results.push(saved);
+            skipCount++;
+          }
+        }
+      }
+      if (skipCount > 0) {
+        onProgress?.({
+          phase: 'fetching_content',
+          message: `检测到 ${skipCount} 个已完成章节，将跳过...`
+        });
+      }
+    }
+  }
+  
   for (let i = 0; i < targetChapters.length; i++) {
     const chapter = targetChapters[i];
+    
+    // 跳过已爬取的章节
+    if (results.some(r => r.url === chapter.url)) {
+      continue;
+    }
+    
     const progress: CrawlProgress = {
       phase: 'fetching_content',
       currentChapter: startIndex + i + 1,
@@ -418,14 +520,22 @@ export async function crawlChapters(
       const $ = cheerio.load(html);
       const content = extractChapterContent($);
       
-      results.push({
+      const crawledChapter: Chapter = {
         ...chapter,
         content,
         wordCount: content.length
-      });
+      };
       
-      // 添加延迟，避免请求过快
-      await new Promise(r => setTimeout(r, 500));
+      results.push(crawledChapter);
+      
+      // 保存进度（支持断点续爬）
+      if (novelTitle) {
+        saveProgress(novelTitle, results);
+      }
+      
+      // 随机延迟 0.5-2 秒
+      const delay = 500 + Math.random() * 1500;
+      await new Promise(r => setTimeout(r, delay));
     } catch (error: any) {
       console.error(`[Crawler] 章节 ${chapter.title} 爬取失败:`, error.message);
       results.push({
@@ -433,6 +543,15 @@ export async function crawlChapters(
         content: `[爬取失败: ${error.message}]`
       });
     }
+  }
+  
+  // 清理进度文件
+  try {
+    if (fs.existsSync(PROGRESS_FILE)) {
+      fs.unlinkSync(PROGRESS_FILE);
+    }
+  } catch (e) {
+    // 忽略
   }
   
   return results;
@@ -613,7 +732,13 @@ export async function crawlNovel(
     });
     
     // 3. 爬取章节内容
-    const chapters = await crawlChapters(analyzeResult.chapters, start, end, onProgress);
+    const chapters = await crawlChapters(
+      analyzeResult.chapters,
+      start,
+      end,
+      onProgress,
+      analyzeResult.novel?.title
+    );
     
     // 4. 导出
     onProgress?.({ phase: 'exporting', message: '正在导出文件...' });
