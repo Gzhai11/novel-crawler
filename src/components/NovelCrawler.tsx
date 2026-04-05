@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Button, Input, Select, MessagePlugin, Progress } from 'tdesign-react';
-import { BookOpen, Download, Loader2, FileText, Trash2 } from 'lucide-react';
+import { Button, Input, Select, MessagePlugin, Progress, Tag, Tooltip } from 'tdesign-react';
+import { BookOpen, Download, Loader2, FileText, Trash2, AlertCircle, CheckCircle, Info } from 'lucide-react';
 
 interface NovelInfo {
   title: string;
@@ -22,13 +22,43 @@ interface CrawlFile {
   path: string;
 }
 
+interface WebsiteAnalysis {
+  url: string;
+  type: string;
+  encoding: string;
+  catalog?: {
+    selectors: string[];
+    pagination: boolean;
+  };
+  chapter?: {
+    titleSelectors: string[];
+    contentSelectors: string[];
+    noiseSelectors: string[];
+  };
+  antiCrawl?: {
+    userAgent: boolean;
+    captcha: boolean;
+    javascript: boolean;
+    delay: number;
+  };
+  recommendations: string[];
+}
+
 interface NovelCrawlerProps {
   onSendMessage?: (message: string) => void;
 }
 
+const WEBSITE_TYPE_NAMES: Record<string, string> = {
+  'traditional': '传统目录型',
+  'reading': '阅读页型',
+  'paginated': '分页型',
+  'scroll_load': '滚动加载型',
+  'anti_crawl': '反爬型'
+};
+
 export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
   // 步骤状态
-  const [step, setStep] = useState<'input' | 'analyzing' | 'range' | 'crawling' | 'done'>('input');
+  const [step, setStep] = useState<'input' | 'analyzing' | 'analysis_result' | 'range' | 'crawling' | 'done'>('input');
   
   // 输入
   const [url, setUrl] = useState('');
@@ -37,6 +67,8 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
   // 分析结果
   const [novel, setNovel] = useState<NovelInfo | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [analysis, setAnalysis] = useState<WebsiteAnalysis | null>(null);
+  const [specPath, setSpecPath] = useState<string | null>(null);
   
   // 章节范围
   const [startChapter, setStartChapter] = useState(0);
@@ -65,14 +97,13 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
     }
   };
 
-  // 分析页面
-  const handleAnalyze = async () => {
+  // 深度分析网站结构
+  const handleDeepAnalyze = async () => {
     if (!url.trim()) {
       MessagePlugin.warning('请输入小说页面URL');
       return;
     }
 
-    // 简单验证 URL
     try {
       new URL(url);
     } catch {
@@ -81,26 +112,46 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
     }
 
     setStep('analyzing');
-    setProgress({ current: 0, total: 0, message: '正在分析页面...' });
+    setProgress({ current: 0, total: 0, message: '正在深度分析网站结构...' });
 
     try {
-      const res = await fetch('/api/crawler/analyze', {
+      // 1. 深度分析网站结构
+      const analyzeRes = await fetch('/api/crawler/analyze-structure', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url })
       });
 
-      const data = await res.json();
+      const analyzeData = await analyzeRes.json();
 
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || '分析失败');
+      if (!analyzeRes.ok || !analyzeData.success) {
+        if (analyzeData.robots && !analyzeData.robots.allowed) {
+          MessagePlugin.warning('网站 robots.txt 禁止爬取该路径');
+        }
+        throw new Error(analyzeData.error || '分析失败');
       }
 
-      setNovel(data.novel);
-      setChapters(data.chapters || []);
-      setEndChapter(data.totalChapters - 1 || 0);
-      setStep('range');
-      MessagePlugin.success(`发现 ${data.totalChapters} 个章节`);
+      setAnalysis(analyzeData.analysis);
+      setSpecPath(analyzeData.spec?.filepath || null);
+
+      // 2. 获取章节列表
+      const chapterRes = await fetch('/api/crawler/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+
+      const chapterData = await chapterRes.json();
+
+      if (chapterData.success) {
+        setNovel(chapterData.novel);
+        setChapters(chapterData.chapters || []);
+        setEndChapter((chapterData.chapters?.length || 1) - 1);
+      }
+
+      setStep('analysis_result');
+      MessagePlugin.success('网站分析完成');
+
     } catch (error: any) {
       MessagePlugin.error(error.message || '分析失败');
       setStep('input');
@@ -131,17 +182,15 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
       }
 
       setTaskId(data.taskId);
-      
-      // 轮询进度
       pollProgress(data.taskId);
     } catch (error: any) {
       MessagePlugin.error(error.message || '启动失败');
-      setStep('range');
+      setStep('analysis_result');
     }
   };
 
   // 轮询进度
-  const pollProgress = async (tid: string) => {
+  const pollProgress = (tid: string) => {
     const poll = async () => {
       try {
         const res = await fetch(`/api/crawler/progress/${tid}`);
@@ -160,7 +209,6 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
             setStep('done');
             MessagePlugin.success('爬取完成！');
             
-            // 如果有消息发送回调，发送完成消息
             if (onSendMessage) {
               onSendMessage(`小说《${novel?.title}》爬取完成！共 ${data.result.chapters?.length || 0} 章，约 ${data.result.totalWords || 0} 字。`);
             }
@@ -169,12 +217,11 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
 
           if (data.progress.phase === 'error') {
             MessagePlugin.error(data.progress.message || '爬取失败');
-            setStep('range');
+            setStep('analysis_result');
             return;
           }
         }
 
-        // 继续轮询
         if (step === 'crawling') {
           setTimeout(poll, 1000);
         }
@@ -197,12 +244,22 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
     }
   };
 
+  // 下载规范文件
+  const handleDownloadSpec = () => {
+    if (specPath) {
+      const filename = specPath.split('/').pop();
+      window.open(`/api/crawler/spec/${filename}`, '_blank');
+    }
+  };
+
   // 重新开始
   const handleReset = () => {
     setStep('input');
     setUrl('');
     setNovel(null);
     setChapters([]);
+    setAnalysis(null);
+    setSpecPath(null);
     setStartChapter(0);
     setEndChapter(0);
     setProgress({ current: 0, total: 0, message: '' });
@@ -230,13 +287,13 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
   };
 
   return (
-    <div className="w-full max-w-2xl mx-auto p-6">
+    <div className="w-full max-w-3xl mx-auto p-6">
       <div className="text-center mb-8">
         <div className="flex items-center justify-center gap-2 mb-2">
           <BookOpen className="w-8 h-8 text-blue-500" />
           <h1 className="text-2xl font-bold">智能小说爬取</h1>
         </div>
-        <p className="text-gray-500">输入小说网站链接，自动识别并爬取章节内容</p>
+        <p className="text-gray-500">输入小说网站链接，自动分析网站结构并爬取章节内容</p>
       </div>
 
       {/* 步骤 1: 输入 URL */}
@@ -271,9 +328,9 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
             theme="primary" 
             block 
             size="large"
-            onClick={handleAnalyze}
+            onClick={handleDeepAnalyze}
           >
-            分析页面
+            分析网站结构
           </Button>
 
           {/* 已有文件 */}
@@ -337,20 +394,98 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
         </div>
       )}
 
-      {/* 步骤 3: 选择范围 */}
-      {step === 'range' && novel && (
+      {/* 步骤 3: 分析结果 */}
+      {step === 'analysis_result' && analysis && (
         <div className="space-y-6">
-          {/* 小说信息 */}
+          {/* 网站分析结果 */}
           <div className="border rounded-lg p-4 bg-blue-50">
-            <h2 className="text-xl font-bold mb-2">{novel.title}</h2>
-            {novel.author && <p className="text-gray-600">作者: {novel.author}</p>}
-            {novel.description && (
-              <p className="text-gray-500 text-sm mt-2 line-clamp-3">{novel.description}</p>
+            <div className="flex items-center gap-2 mb-3">
+              <Info className="w-5 h-5 text-blue-500" />
+              <h3 className="font-semibold">网站结构分析</h3>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="text-gray-500">网站类型：</span>
+                <Tag theme="primary">{WEBSITE_TYPE_NAMES[analysis.type] || analysis.type}</Tag>
+              </div>
+              <div>
+                <span className="text-gray-500">编码格式：</span>
+                <span>{analysis.encoding}</span>
+              </div>
+              <div>
+                <span className="text-gray-500">目录选择器：</span>
+                <span className="font-mono text-xs">{analysis.catalog?.selectors[0] || '未识别'}</span>
+              </div>
+              <div>
+                <span className="text-gray-500">正文选择器：</span>
+                <span className="font-mono text-xs">{analysis.chapter?.contentSelectors[0] || '未识别'}</span>
+              </div>
+            </div>
+
+            {/* 反爬机制 */}
+            {analysis.antiCrawl && (
+              <div className="mt-4 pt-4 border-t border-blue-200">
+                <p className="text-sm font-medium mb-2">检测到的反爬机制：</p>
+                <div className="flex flex-wrap gap-2">
+                  {analysis.antiCrawl.captcha && (
+                    <Tag theme="warning">验证码</Tag>
+                  )}
+                  {analysis.antiCrawl.javascript && (
+                    <Tag theme="warning">JS渲染</Tag>
+                  )}
+                  {analysis.antiCrawl.cookie && (
+                    <Tag theme="warning">需要登录</Tag>
+                  )}
+                  {!analysis.antiCrawl.captcha && !analysis.antiCrawl.javascript && !analysis.antiCrawl.cookie && (
+                    <Tag theme="success">无明显反爬</Tag>
+                  )}
+                </div>
+                <p className="text-sm text-gray-500 mt-2">
+                  建议延迟：<strong>{analysis.antiCrawl.delay}秒</strong>
+                </p>
+              </div>
             )}
-            <p className="text-blue-600 mt-2">共 {chapters.length} 章</p>
           </div>
 
-          {/* 章节范围 */}
+          {/* 小说信息 */}
+          {novel && (
+            <div className="border rounded-lg p-4 bg-green-50">
+              <h2 className="text-xl font-bold mb-2">{novel.title}</h2>
+              {novel.author && <p className="text-gray-600">作者: {novel.author}</p>}
+              {novel.description && (
+                <p className="text-gray-500 text-sm mt-2 line-clamp-3">{novel.description}</p>
+              )}
+              <p className="text-green-600 mt-2">发现 {chapters.length} 个章节</p>
+            </div>
+          )}
+
+          {/* 建议 */}
+          {analysis.recommendations.length > 0 && (
+            <div className="border rounded-lg p-4 bg-yellow-50">
+              <h3 className="font-semibold mb-2 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4" />
+                爬取建议
+              </h3>
+              <ul className="text-sm space-y-1">
+                {analysis.recommendations.map((rec, i) => (
+                  <li key={i} className={rec.startsWith('⚠') || rec.startsWith('!') ? 'text-orange-600' : ''}>
+                    {rec}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* 规范文件下载 */}
+          {specPath && (
+            <Button variant="outline" onClick={handleDownloadSpec}>
+              <FileText className="w-4 h-4 mr-2" />
+              下载爬取规范文件
+            </Button>
+          )}
+
+          {/* 章节范围选择 */}
           <div>
             <label className="block text-sm font-medium mb-2">爬取范围</label>
             <div className="flex gap-4 items-center">
@@ -396,21 +531,6 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
             />
           </div>
 
-          {/* 章节预览 */}
-          <div className="border rounded-lg p-4 max-h-48 overflow-y-auto bg-gray-50">
-            <p className="text-sm font-medium mb-2">章节列表预览:</p>
-            <div className="space-y-1 text-sm">
-              {chapters.slice(0, 10).map((ch, i) => (
-                <div key={ch.index} className={i >= startChapter && i <= endChapter ? 'text-blue-600' : 'text-gray-400'}>
-                  {ch.index + 1}. {ch.title}
-                </div>
-              ))}
-              {chapters.length > 10 && (
-                <p className="text-gray-400">... 共 {chapters.length} 章</p>
-              )}
-            </div>
-          </div>
-
           <div className="flex gap-4">
             <Button variant="outline" onClick={handleReset}>
               返回
@@ -433,7 +553,7 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
           {progress.total > 0 && (
             <div>
               <Progress
-                percentage={Math.round((progress.current / progress.total) * 100)}
+         percentage={Math.round((progress.current / progress.total) * 100)}
                 theme="circle"
                 size="large"
               />
@@ -449,9 +569,7 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
       {step === 'done' && (
         <div className="space-y-6 text-center py-4">
           <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto">
-            <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
+            <CheckCircle className="w-8 h-8 text-green-500" />
           </div>
           
           <div>
@@ -463,7 +581,7 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
             )}
           </div>
 
-      <div className="flex gap-4 justify-center">
+          <div className="flex gap-4 justify-center">
             <Button theme="primary" onClick={handleDownload}>
               <Download className="w-4 h-4 mr-2" />
               下载文件

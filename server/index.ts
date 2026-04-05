@@ -8,6 +8,9 @@ import { promisify } from "util";
 import * as db from "./db.js";
 import * as crawler from "./crawler.js";
 import type { CrawlProgress } from "./crawler.js";
+import * as analyzer from "./analyzer.js";
+import * as robots from "./robots.js";
+import * as specGenerator from "./spec-generator.js";
 
 const execAsync = promisify(exec);
 
@@ -48,6 +51,90 @@ app.get("/api/health", (req, res) => {
 
 // 存储爬取任务的进度
 const crawlTasks = new Map<string, { progress: CrawlProgress; result?: any }>();
+
+// ==================== 网站结构分析 API ====================
+
+// 深度分析网站结构
+app.post("/api/crawler/analyze-structure", async (req, res) => {
+  try {
+    const { url } = req.body;
+    
+    if (!url) {
+      return res.status(400).json({ error: "请提供网站 URL" });
+    }
+    
+    console.log(`[Analyzer] 深度分析网站: ${url}`);
+    
+    // 1. 检查 robots.txt
+    const robotsResult = await robots.checkRobotsTxt(url);
+    console.log(`[Analyzer] Robots.txt: ${robotsResult.allowed ? '允许' : '禁止'}`);
+    
+    if (!robotsResult.allowed) {
+      return res.json({
+        success: false,
+        error: '网站 robots.txt 禁止爬取',
+        robots: robotsResult
+      });
+    }
+    
+    // 2. 获取页面 HTML
+    const { html } = await crawler.fetchPage ? 
+      await crawler.fetchPage(url) : 
+      await fetch(url).then(r => r.text()).then(html => ({ html, url, statusCode: 200 }));
+    
+    // 3. 分析网站结构
+    const analysis = await analyzer.analyzeWebsite(url, html);
+    console.log(`[Analyzer] 网站类型: ${analysis.type}`);
+    console.log(`[Analyzer] 目录选择器: ${analysis.catalog?.selectors.length || 0} 个`);
+    
+    // 4. 生成爬取规范
+    const spec = specGenerator.generateCrawlSpec(analysis);
+    const specPath = specGenerator.saveSpecFile(spec);
+    
+    res.json({
+      success: true,
+      analysis,
+      spec: {
+        websiteName: spec.websiteName,
+        generatedAt: spec.generatedAt,
+        filepath: specPath
+      },
+      robots: robotsResult
+    });
+  } catch (error: any) {
+    console.error("[Analyzer] 分析错误:", error);
+    res.status(500).json({ error: error.message || "分析失败" });
+  }
+});
+
+// 获取爬取规范文件
+app.get("/api/crawler/spec/:filename", (req, res) => {
+  const { filename } = req.params;
+  const specDir = '/tmp/novels/specs';
+  const filepath = path.join(specDir, filename);
+  
+  if (!fs.existsSync(filepath)) {
+    return res.status(404).json({ error: "规范文件不存在" });
+  }
+  
+  res.download(filepath);
+});
+
+// 检查 robots.txt
+app.get("/api/crawler/robots", async (req, res) => {
+  try {
+    const { url } = req.query;
+    
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({ error: "请提供网站 URL" });
+    }
+    
+    const result = await robots.checkRobotsTxt(url);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // 分析小说页面
 app.post("/api/crawler/analyze", async (req, res) => {
