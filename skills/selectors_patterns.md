@@ -1,237 +1,130 @@
-# 网站选择器模式库
+# 常见选择器模式参考
 
-## 通用章节列表选择器
+## 目录页选择器模式
 
-### 笔趣阁系列
+### 章节列表
+
+| 模式 | CSS 选择器 | XPath | 适用场景 |
+|------|-----------|-------|---------|
+| 简单列表 | `.chapter-list a` | `//div[@class="chapter-list"]//a` | 标准目录结构 |
+| 有序列表 | `ol.catalog a` | `//ol[@class="catalog"]//a` | 有序号章节 |
+| 定义列表 | `dl.chapter-list dt a` | `//dl[@class="chapter-list"]//dt//a` | 卷章节结构 |
+| 表格结构 | `table.chapter-list a` | `//table[@class="chapter-list"]//a` | 老式网站 |
+| 无序列表 | `ul.chapters li a` | `//ul[@class="chapters"]//li//a` | 常见列表 |
+
+### 章节标题提取
+
+| 模式 | 选择器 | 说明 |
+|------|--------|------|
+| 文本内容 | `a` 的 `textContent` | 链接文本即标题 |
+| title 属性 | `a` 的 `title` 属性 | 标题在属性中 |
+| 子元素 | `a .title` | 标题在子元素中 |
+| 属性拼接 | `span.num + span.title` | 序号+标题分开 |
+
+### 分页导航
+
+| 模式 | 选择器 | 说明 |
+|------|--------|------|
+| 下一页链接 | `a.next`, `.pagination .next a` | 下一页按钮 |
+| 页码列表 | `.pagination a[data-page]` | 带页码的链接 |
+| 加载更多 | `.load-more` 按钮 | 动态加载 |
+
+## 章节页选择器模式
+
+### 章节标题
+
+| 模式 | CSS 选择器 | XPath |
+|------|-----------|-------|
+| H1 标题 | `h1.chapter-title` | `//h1[@class="chapter-title"]` |
+| 通用标题 | `h1`, `.title` | `//h1` 或 `//*[contains(@class,"title")]` |
+| 组合标题 | `.chapter-header .title` | `//div[@class="chapter-header"]//span[@class="title"]` |
+| 属性标题 | `[data-title]` | `//*[@data-title]` |
+
+### 正文内容
+
+| 模式 | CSS 选择器 | XPath | 说明 |
+|------|-----------|-------|------|
+| ID 定位 | `#content`, `#chapter-content` | `//*[@id="content"]` | 最精确 |
+| 类名定位 | `.content`, `.text-content` | `//*[contains(@class,"content")]` | 常用 |
+| 标签+类 | `div.content` | `//div[@class="content"]` | 避免误匹配 |
+| 多段落 | `.content p` | `//div[@class="content"]//p` | 段落提取 |
+
+### 需要过滤的元素
+
+| 类型 | 选择器 | 说明 |
+|------|--------|------|
+| 广告 | `.ad`, `.advertisement`, `[data-ad]` | 广告区块 |
+| 导航 | `.nav`, `.navbar`, `nav` | 导航栏 |
+| 推荐 | `.recommend`, `.related` | 推荐内容 |
+| 评论 | `.comments`, `#comments` | 评论区 |
+| 页脚 | `footer`, `.footer` | 页脚信息 |
+| 脚本 | `script`, `style`, `noscript` | 技术元素 |
+
+## 导航链接选择器模式
+
+### 章节导航
+
+| 导航类型 | CSS 选择器 | XPath | 文本匹配 |
+|----------|-----------|-------|---------|
+| 上一章 | `.prev-chapter`, `a[href*="prev"]` | `//a[contains(@class,"prev")]` | `a:contains('上一章')` |
+| 下一章 | `.next-chapter`, `a[href*="next"]` | `//a[contains(@class,"next")]` | `a:contains('下一章')` |
+| 返回目录 | `.back-catalog`, `a[href*="list"]` | `//a[contains(text(),"目录")]` | `a:contains('目录')` |
+| 首页 | `.home`, `a[href="/"]` | `//a[@href="/"]` | `a:contains('首页')` |
+
+### 正文分页导航
+
+| 模式 | 选择器 | 说明 |
+|------|--------|------|
+| 上一页 | `.prev-page`, `.page-prev` | 正文上一页 |
+| 下一页 | `.next-page`, `.page-next` | 正文下一页 |
+| 页码 | `.page-num`, `span.current` | 当前页码 |
+| 总页数 | `.total-pages`, `.page-count` | 总页数 |
+
+## 常见正文容器模式
+
+### 国内小说网站常见结构
+
 ```css
-#list dd a
-.listmain a
-#list a
+/* 起点、纵横类 */
+#content, .chapter-content, .text-content
+
+/* 17K、晋江文学城类 */
+#chapterContent, .chapter-text, .article-content
+
+/* 盗版站常见 */
+#content1, #chaptercontent, .read-content
+
+/* 移动端适配 */
+.chapter_body, .content-body, .article-body
 ```
 
-### 章节列表通用
-```css
-.chapter-list a
-#chapters a
-.catalog a
-.chapter-list-box a
-#chapter-list a
-```
+### 需要特殊处理的模式
 
-### 书籍列表
-```css
-.book-list a
-.zjlist a
-.menu_list a
-```
+| 问题 | 解决方案 |
+|------|---------|
+| 内容在 script 中 | 提取 script 内容，解析文本 |
+| 内容加密 | 识别加密函数，调用解密 |
+| 内容在 iframe 中 | 定位 iframe，切换上下文 |
+| 内容为图片 | 提取图片 URL，OCR 识别 |
+| 懒加载 | 滚动触发加载，等待渲染 |
 
-### 列表主页
-```css
-div.listmain a
-div.list a
-ul.chapter-list a
-```
+## 选择器优先级
 
-## 章节标题正则匹配
+推荐按以下优先级尝试选择器：
+
+1. **ID 选择器**：最精确，优先使用
+2. **语义化类名**：`.chapter-content`, `.novel-text`
+3. **结构选择器**：`article.main p`
+4. **属性选择器**：`[data-type="content"]`
+5. **位置选择器**：最后手段，不够稳定
+
+## 选择器验证技巧
 
 ```javascript
-const CHAPTER_PATTERNS = [
-  // 中文章节
-  /^第[一二三四五六七八九十百千万零\d]+[章节回集]/,
-  /^第[\d]+[章节回]/,
-  
-  // 数字章节
-  /^[【\[]?[\d]+[】\]]/,
-  /^\d+[\.\、]/,
-  
-  // 英文章节
-  /^Chapter\s*\d+/i,
-  /^CHAPTER\s*\d+/i,
-];
-```
+// 浏览器控制台验证选择器
+document.querySelectorAll('#content');
+document.querySelector('.chapter-title').textContent;
 
-## 内容区域选择器
-
-### 常用选择器
-```css
-#content
-.content
-#chapter-content
-.chapter-content
-.novel-content
-.article-content
-.text-content
-.book-content
-#BookText
-#txt
-.txt
-article
-.post-content
-.entry-content
-```
-
-### 优先级排序
-1. `#content` - 最常见
-2. `#chapter-content` - 专用章节内容
-3. `.novel-content` - 小说内容
-4. `#BookText` - 书本内容
-5. `article` - HTML5 语义标签
-
-## 噪音元素选择器
-
-```css
-/* 广告 */
-.ads
-.advertisement
-.ad
-
-/* 导航 */
-nav
-.nav
-header
-footer
-
-/* 推荐 */
-.recommend
-.related
-
-/* 评论 */
-.comments
-.comment-list
-
-/* 分享 */
-.share
-.social
-
-/* 侧边栏 */
-[class*="sidebar"]
-.sidebar
-
-/* 需要移除的标签 */
-script
-style
-iframe
-```
-
-## 小说信息选择器
-
-### 书名
-```css
-h1
-meta[property="og:title"]
-.title
-.book-title
-```
-
-### 作者
-```css
-meta[property="og:author"]
-meta[name="author"]
-[class*="author"]
-.author-name
-```
-
-### 封面
-```css
-meta[property="og:image"]
-.book-cover img
-.cover img
-```
-
-### 简介
-```css
-meta[property="og:description"]
-meta[name="description"]
-.book-intro
-.intro
-.description
-```
-
-## 常见网站模板
-
-### 起点/阅文系
-```javascript
-{
-  title: '.book-info h1',
-  author: '.book-info .writer',
-  chapters: '.chapter-wrap a',
-  content: '.read-content .j_readContent',
-}
-```
-
-### 纵横系
-```javascript
-{
-  title: '.book-name',
-  author: '.au-name a',
-  chapters: '.chapter-list a',
-  content: '.content',
-}
-```
-
-### 免费小说站
-```javascript
-{
-  title: 'h1',
-  author: '.author, #info p:first-child',
-  chapters: '#list dd a, .listmain a',
-  content: '#content, #chapter-content',
-}
-```
-
-## 动态加载检测
-
-### 检测抽屉式加载
-```javascript
-const hasDrawer = await page.$('.load-more, .expand, .show-all, [class*="more"]');
-```
-
-### 检测滚动加载
-```javascript
-const hasInfiniteScroll = await page.evaluate(() => {
-  return window.addEventListener.toString().includes('scroll');
-});
-```
-
-### 检测分页
-```javascript
-const hasPagination = await page.$('.pagination, .page-nav, .pager, .page-link');
-```
-
-## 内容清洗规则
-
-### 移除噪音文本
-```javascript
-const NOISE_PATTERNS = [
-  /^.*?小说.*?首发.*$/,
-  /^.*?本章未完.*$/,
-  /^.*?点击下一页.*$/,
-  /^.*?返回目录.*$/,
-  /^.*?推荐阅读.*$/,
-  /^.*?www\..*?\.com.*$/,
-  /^.*?http[s]?:\/\/.*$/,
-  /^[（\(].*?[）\)]$/,
-  /^---+$/,
-  /^\s*$/,
-];
-```
-
-### 提取纯文本
-```javascript
-const cleanContent = (html) => {
-  // 1. 移除 HTML 标签
-  let text = html.replace(/<[^>]+>/g, '');
-  
-  // 2. 解码 HTML 实体
-  text = text.replace(/&nbsp;/g, ' ')
-             .replace(/&lt;/g, '<')
-             .replace(/&gt;/g, '>')
-             .replace(/&amp;/g, '&')
-             .replace(/&quot;/g, '"');
-  
-  // 3. 清理多余空白
-  text = text.replace(/\s+/g, ' ').trim();
-  
-  return text;
-};
+// XPath 验证
+$x('//div[@id="content"]//p');
 ```
