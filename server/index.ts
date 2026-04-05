@@ -11,6 +11,7 @@ import type { CrawlProgress } from "./crawler.js";
 import * as analyzer from "./analyzer.js";
 import * as robots from "./robots.js";
 import * as specGenerator from "./spec-generator.js";
+import * as ollama from "./ollama.js";
 
 const execAsync = promisify(exec);
 
@@ -45,6 +46,84 @@ const defaultModel = "claude-sonnet-4";
 // 健康检查
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// Ollama 健康检查
+app.get("/api/ollama/health", async (req, res) => {
+  try {
+    const result = await ollama.checkHealth();
+    res.json(result);
+  } catch (error: any) {
+    res.json({ status: 'error', model: 'qwen2.5:3b' });
+  }
+});
+
+// Ollama 模型列表
+app.get("/api/ollama/models", async (req, res) => {
+  try {
+    const models = await ollama.listModels();
+    res.json({ models });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Ollama 对话接口
+app.post("/api/ollama/chat", async (req, res) => {
+  try {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "消息不能为空" });
+    }
+
+    console.log(`[Ollama] 收到消息: ${message}`);
+
+    // 调用 Ollama 处理
+    const reply = await ollama.handleUserMessage(message);
+
+    res.json({ reply });
+  } catch (error: any) {
+    console.error(`[Ollama] 错误:`, error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Ollama 流式对话接口
+app.post("/api/ollama/chat/stream", async (req, res) => {
+  try {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: "消息不能为空" });
+    }
+
+    console.log(`[Ollama] 流式消息: ${message}`);
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    // 调用 Ollama 处理（流式）
+    await ollama.chatCompletion(
+      [
+        { role: 'system', content: ollama.SYSTEM_PROMPT },
+        { role: 'user', content: message }
+      ],
+      {
+        stream: true,
+        onChunk: (chunk) => {
+          res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
+        }
+      }
+    );
+
+    res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+    res.end();
+  } catch (error: any) {
+    console.error(`[Ollama] 流式错误:`, error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // ==================== 小说爬取 API ====================
