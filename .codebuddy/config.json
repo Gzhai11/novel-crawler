@@ -1,0 +1,1 @@
+{"skills": [{"name": "novel-scraper-analyzer", "path": ".codebuddy/skills/novel-scraper-analyzer", "enabled": true, "description": "小说网站爬取分析器 - 自动分析小说网站结构，提取目录、章节、正文等关键信息"}], "tools": {"enabled": ["Skill", "Bash", "Read", "Write", "Edit", "WebSearch", "WebFetch"]}}

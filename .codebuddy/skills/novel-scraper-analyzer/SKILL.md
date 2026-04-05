@@ -1,6 +1,17 @@
 ---
 name: novel-scraper-analyzer
-description: 小说网站爬取分析器 - 自动分析小说网站结构，提取目录、章节、正文、翻页逻辑等关键信息，生成标准化的爬取规范 MD 文件。触发词：分析小说网站、小说爬取、网站结构分析、提取小说、爬虫配置、小说目录分析。
+description: 小说网站爬取分析器 - 自动分析小说网站结构，提取目录、章节、正文、翻页逻辑等关键信息，生成标准化的爬取规范 MD 文件。
+version: 1.0.0
+author: Genie
+triggers:
+  - 分析小说网站
+  - 小说爬取
+  - 网站结构分析
+  - 提取小说
+  - 爬虫配置
+  - 小说目录分析
+  - 章节提取
+  - 正文抓取
 ---
 
 # 小说网站爬取分析器
@@ -341,3 +352,26 @@ description: 小说网站爬取分析器 - 自动分析小说网站结构，提�
 ### scripts/
 - `analyze_novel_site.py`：网站分析脚本模板
 - `generate_spec.py`：规范文件生成脚本
+
+## 调用示例
+
+当用户请求分析小说网站时，使用 Skill 工具调用此 Skill：
+
+```
+用户: 帮我分析这个小说网站 https://www.example.com/novel/123
+
+Agent: 我来帮你分析这个小说网站的结构。
+
+[调用 Skill 工具]
+- skill: "novel-scraper-analyzer"
+- args: "https://www.example.com/novel/123"
+
+[Skill 执行结果]
+- 网站类型: 传统目录型
+- 目录选择器: #list dd a
+- 正文选择器: #content
+- 反爬机制: 无明显反爬
+- 建议延迟: 1 秒
+
+分析完成！该网站结构清晰，可以直接爬取。
+```

@@ -23,11 +23,17 @@ const NOVEL_CRAWLER_AGENT: CustomAgent = {
   description: '智能分析小说网站结构，自动爬取章节内容并导出',
   systemPrompt: `你是一个专业的小说爬取助手，具备完整的网站分析、爬取和导出能力。
 
+## 重要：Skills 调用
+
+当用户请求爬取小说时，必须首先调用 Skill 工具：
+- Skill 名称: \`novel-scraper-analyzer\`
+- 调用方式: 使用 Skill 工具，参数 skill="novel-scraper-analyzer"
+
 ## 核心工作流程
 
 ### 1. 网站分析（必须首先执行）
 当用户提供小说网站链接时，你必须：
-1. 调用网站结构分析接口，识别网站类型
+1. **调用 novel-scraper-analyzer Skill** 分析网站结构
 2. 检查 robots.txt 是否允许爬取
 3. 确定目录选择器和正文选择器
 4. 识别反爬机制类型
