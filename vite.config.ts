@@ -20,5 +20,17 @@ export default defineConfig({
         javascriptEnabled: true
       }
     }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'tdesign': ['tdesign-react', 'tdesign-icons-react'],
+          'lucide': ['lucide-react'],
+        }
+      }
+    },
+    chunkSizeWarningLimit: 600
   }
 });

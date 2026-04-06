@@ -164,6 +164,7 @@ const CHAPTER_PATTERNS = {
   // 常见的章节列表选择器
   selectors: [
     '#list dd a',           // 笔趣阁系列
+    '#list a',              // 列表
     '.chapter-list a',      // 章节列表
     '#chapters a',          // 章节列表
     '.list-chapter a',      // 章节列表
@@ -176,8 +177,21 @@ const CHAPTER_PATTERNS = {
     '.chapter-ul a',        // 章节UL
     '.chapter-item',        // 章节项
     'div.listmain a',       // 列表主页
-    '#list a',              // 列表
     '.zjlist a',            // 章节列表
+    // 新增：更多常见选择器
+    '.read_chapters a',     // 阅读章节
+    '.read_list a',         // 阅读列表
+    '#chapterlist a',       // 章节列表
+    '.list_box a',          // 列表盒子
+    '.book-chapter-list a', // 书籍章节列表
+    '.chapter-list-wrap a', // 章节列表包装
+    '.chapterbar a',        // 章节栏
+    '.article-list a',      // 文章列表
+    '.section-list a',      // 节列表
+    'dl dd a',              // 定义列表
+    'ul li a',              // 通用列表
+    '.list a',              // 列表
+    'dd a',                 // dd 链接
   ],
   // 章节标题正则
   titlePatterns: [
@@ -187,12 +201,13 @@ const CHAPTER_PATTERNS = {
     /^Chapter\s*\d+/i,
     /^CHAPTER\s*\d+/i,
     /^\d+[\.\、]/,
+    /^[\d]+$/,              // 纯数字
   ]
 };
 
 function extractChapterList($: cheerio.CheerioAPI, baseUrl: string): Chapter[] {
   const chapters: Chapter[] = [];
-  let found = false;
+  const seenUrls = new Set<string>();
   
   // 尝试各种选择器
   for (const selector of CHAPTER_PATTERNS.selectors) {
@@ -203,58 +218,123 @@ function extractChapterList($: cheerio.CheerioAPI, baseUrl: string): Chapter[] {
         const href = $link.attr('href');
         const title = $link.text().trim();
         
-        if (href && title) {
-          // 检查是否像章节标题
+        if (href && title && href !== '#' && !href.startsWith('javascript:')) {
+          // 放宽标题匹配：短标题或符合章节模式
           const isChapterLike = CHAPTER_PATTERNS.titlePatterns.some(p => p.test(title)) ||
-            title.length < 50; // 短标题也可能是章节
+            (title.length > 0 && title.length < 50);
           
           if (isChapterLike) {
-            const fullUrl = new URL(href, baseUrl).href;
-            chapters.push({
-              index: chapters.length,
-              title,
-              url: fullUrl
-            });
+            try {
+              const fullUrl = new URL(href, baseUrl).href;
+              if (!seenUrls.has(fullUrl)) {
+                seenUrls.add(fullUrl);
+                chapters.push({
+                  index: chapters.length,
+                  title,
+                  url: fullUrl
+                });
+              }
+            } catch (e) {
+              // URL 解析失败，忽略
+            }
           }
         }
       });
       
-      if (chapters.length > 0) {
-        found = true;
-        break;
+      // 如果找到超过 3 个章节，认为选择器有效，停止尝试
+      if (chapters.length > 3) {
+        console.log(`[Crawler] 使用选择器 "${selector}" 找到 ${chapters.length} 个章节`);
+        return chapters;
       }
     }
   }
   
-  // 如果没有找到，尝试更通用的方法
-  if (!found) {
-    $('a').each((_, element) => {
-      const $link = $(element);
-      const href = $link.attr('href');
-      const title = $link.text().trim();
+  // 如果还是没找到，尝试智能检测：查找包含大量链接的区域
+  if (chapters.length <= 3) {
+    console.log('[Crawler] 常规选择器未找到足够章节，尝试智能检测...');
+    
+    // 查找链接密度高的区域
+    const containers = $('div, section, main, article, ul, ol, dl');
+    const bestContainerInfo: { selector: string; count: number }[] = [];
+    
+    containers.each((_, el) => {
+      const $container = $(el);
+      const links = $container.find('a[href]');
+      let validCount = 0;
       
-      if (href && title) {
-        const isChapterLike = CHAPTER_PATTERNS.titlePatterns.some(p => p.test(title));
-        if (isChapterLike) {
-          try {
-            const fullUrl = new URL(href, baseUrl).href;
-            // 避免重复
-            if (!chapters.some(c => c.url === fullUrl)) {
-              chapters.push({
-                index: chapters.length,
-                title,
-                url: fullUrl
-              });
-            }
-          } catch (e) {
-            // URL 解析失败，忽略
-          }
+      links.each((__, link) => {
+        const href = $(link).attr('href');
+        const text = $(link).text().trim();
+        if (href && text && text.length < 50 && !href.startsWith('#') && !href.startsWith('javascript:')) {
+          validCount++;
         }
+      });
+      
+      if (validCount > 5) {
+        const id = $container.attr('id');
+        const cls = $container.attr('class');
+        bestContainerInfo.push({
+          selector: id ? `#${id}` : (cls ? `.${cls.split(' ')[0]}` : 'unknown'),
+          count: validCount
+        });
       }
     });
+    
+    // 找到链接最多的容器
+    if (bestContainerInfo.length > 0) {
+      bestContainerInfo.sort((a, b) => b.count - a.count);
+      const best = bestContainerInfo[0];
+      
+      if (best.count > 10) {
+        console.log(`[Crawler] 智能检测到高密度链接区域: ${best.selector} (${best.count} 链接)`);
+        
+        // 重新从这个容器提取
+        $('a').each((_, element) => {
+          const $link = $(element);
+          const href = $link.attr('href');
+          const title = $link.text().trim();
+          
+          if (href && title && !href.startsWith('#') && !href.startsWith('javascript:') && title.length < 50) {
+            try {
+              const fullUrl = new URL(href, baseUrl).href;
+              if (!seenUrls.has(fullUrl)) {
+                // 检查 URL 是否像章节链接（包含数字或特定路径）
+                const urlPath = new URL(fullUrl).pathname;
+                if (/\d+|chapter|read|novel|\.\w+$/.test(urlPath) || CHAPTER_PATTERNS.titlePatterns.some(p => p.test(title))) {
+                  seenUrls.add(fullUrl);
+                  chapters.push({
+                    index: chapters.length,
+                    title,
+                    url: fullUrl
+                  });
+                }
+              }
+            } catch (e) {
+              // URL 解析失败，忽略
+            }
+          }
+        });
+      }
+    }
   }
   
-  return chapters;
+  // 过滤掉明显不是章节的链接（如导航、广告等）
+  const filteredChapters = chapters.filter(ch => {
+    const title = ch.title.toLowerCase();
+    const url = ch.url.toLowerCase();
+    
+    // 排除关键词
+    const excludeKeywords = ['首页', '首页', '登录', '注册', '收藏', '书架', '下载', 'app', '返回', '上一页', '下一页', 'more', '更多'];
+    if (excludeKeywords.some(k => title.includes(k))) return false;
+    
+    // 排除非内容链接
+    if (url.includes('/user/') || url.includes('/login') || url.includes('/register')) return false;
+    
+    return true;
+  });
+  
+  console.log(`[Crawler] 最终找到 ${filteredChapters.length} 个章节`);
+  return filteredChapters;
 }
 
 function extractNovelInfo($: cheerio.CheerioAPI, url: string): NovelInfo {
@@ -793,6 +873,9 @@ export async function crawlNovel(
   }
 }
 
+// 导出 fetchPage 函数供外部使用
+export { fetchPage };
+
 export default {
   analyzeNovelPage,
   crawlChapters,
@@ -800,5 +883,6 @@ export default {
   exportToTxt,
   exportToMarkdown,
   exportToHtml,
-  saveFile
+  saveFile,
+  fetchPage
 };

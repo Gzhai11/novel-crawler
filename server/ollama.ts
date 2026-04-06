@@ -3,20 +3,18 @@
  * 支持 qwen2.5:3b 等本地模型
  */
 
-import { Configuration, OpenAIApi } from 'openai';
-import * as fs from 'fs';
+import OpenAI from 'openai';
 
 // Ollama 配置
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434/v1';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:3b';
 
 // 初始化 OpenAI 客户端（兼容 Ollama）
-const configuration = new Configuration({
-  basePath: OLLAMA_BASE_URL,
+const openai = new OpenAI({
+  baseURL: OLLAMA_BASE_URL,
   apiKey: 'ollama', // Ollama 不需要真实 API Key
+  dangerouslyAllowBrowser: true,
 });
-
-const openai = new OpenAIApi(configuration);
 
 // 消息格式转换
 interface Message {
@@ -48,55 +46,35 @@ export async function chatCompletion(
   try {
     if (stream) {
       // 流式响应
-      const response = await openai.createChatCompletion(
-        {
-          model: OLLAMA_MODEL,
-          messages,
-          temperature,
-          max_tokens: maxTokens,
-          stream: true,
-        },
-        {
-          responseType: 'stream',
-        }
-      );
+      const stream = await openai.chat.completions.create({
+        model: OLLAMA_MODEL,
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        temperature,
+        max_tokens: maxTokens,
+        stream: true,
+      });
 
       let fullContent = '';
-      const stream = response.data as any;
 
-      return new Promise((resolve, reject) => {
-        stream.on('data', (chunk: any) => {
-          const lines = chunk.toString().split('\n');
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = JSON.parse(line.slice(6));
-              if (data.choices?.[0]?.delta?.content) {
-                const content = data.choices[0].delta.content;
-                fullContent += content;
-                options?.onChunk?.(content);
-              }
-            }
-          }
-        });
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content || '';
+        if (content) {
+          fullContent += content;
+          options?.onChunk?.(content);
+        }
+      }
 
-        stream.on('end', () => {
-          resolve(fullContent);
-        });
-
-        stream.on('error', (err: Error) => {
-          reject(err);
-        });
-      });
+      return fullContent;
     } else {
       // 非流式响应
-      const response = await openai.createChatCompletion({
+      const response = await openai.chat.completions.create({
         model: OLLAMA_MODEL,
-        messages,
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
         temperature,
         max_tokens: maxTokens,
       });
 
-      return response.data.choices[0]?.message?.content || '';
+      return response.choices[0]?.message?.content || '';
     }
   } catch (error: any) {
     console.error('[Ollama] API 错误:', error.message);
@@ -181,9 +159,12 @@ export async function handleUserMessage(userMessage: string): Promise<string> {
   return chatCompletion(messages);
 }
 
+export { SYSTEM_PROMPT };
+
 export default {
   chatCompletion,
   checkHealth,
   listModels,
   handleUserMessage,
+  SYSTEM_PROMPT,
 };

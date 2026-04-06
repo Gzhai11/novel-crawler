@@ -60,7 +60,7 @@ async function initDatabase() {
   try {
     const tableInfo = db.exec("PRAGMA table_info(sessions)");
     if (tableInfo.length > 0) {
-      const columns = tableInfo[0].values.map(row => row[1]);
+      const columns = tableInfo[0].values.map((row: any) => row[1]);
       if (!columns.includes('sdk_session_id')) {
         db.run("ALTER TABLE sessions ADD COLUMN sdk_session_id TEXT");
         console.log("[DB] Added sdk_session_id column to sessions table");

@@ -1,3 +1,4 @@
+import 'dotenv/config';  // 加载 .env 文件，必须在最前面
 import express from "express";
 import { query, unstable_v2_createSession, unstable_v2_authenticate, PermissionResult, CanUseTool } from "@tencent-ai/agent-sdk";
 import { v4 as uuidv4 } from "uuid";
@@ -12,6 +13,7 @@ import * as analyzer from "./analyzer.js";
 import * as robots from "./robots.js";
 import * as specGenerator from "./spec-generator.js";
 import * as ollama from "./ollama.js";
+import { getAllCustomModels } from "./models.config.js";
 
 const execAsync = promisify(exec);
 
@@ -511,34 +513,67 @@ app.post("/api/save-env-config", (req, res) => {
 // 获取可用模型列表
 app.get("/api/models", async (req, res) => {
   try {
+    // 获取自定义模型
+    const customModels = getAllCustomModels();
+    console.log("[Models] Custom models:", customModels.length);
+    
     if (cachedModels.length === 0) {
       console.log("[Models] Creating session to fetch available models...");
       
-      const session = await unstable_v2_createSession({ 
-        cwd: process.cwd()
-      });
-      
-      console.log("[Models] Session created, calling getAvailableModels()...");
-      const models = await session.getAvailableModels();
-      console.log("[Models] Got", models.length, "models");
-      
-      if (models && Array.isArray(models)) {
-        cachedModels = models;
+      try {
+        const session = await unstable_v2_createSession({ 
+          cwd: process.cwd()
+        });
+        
+        console.log("[Models] Session created, calling getAvailableModels()...");
+        const models = await session.getAvailableModels();
+        console.log("[Models] Got", models.length, "models from SDK");
+        
+        if (models && Array.isArray(models)) {
+          cachedModels = models;
+        }
+      } catch (sdkError: any) {
+        console.log("[Models] SDK error, using fallback models:", sdkError.message);
       }
     }
     
+    // 合并 SDK 模型和自定义模型（去重）
+    const allModels = [...cachedModels];
+    for (const custom of customModels) {
+      if (!allModels.some(m => m.modelId === custom.modelId)) {
+        allModels.push({
+          modelId: custom.modelId,
+          name: custom.name,
+          description: custom.description,
+        });
+      }
+    }
+    
+    // 如果没有模型，使用默认列表
+    const finalModels = allModels.length > 0 ? allModels : [
+      { modelId: "claude-sonnet-4", name: "Claude Sonnet 4" },
+      { modelId: "claude-opus-4", name: "Claude Opus 4" }
+    ];
+    
     res.json({ 
-      models: cachedModels.length > 0 ? cachedModels : [
-        { modelId: "claude-sonnet-4", name: "Claude Sonnet 4" }
-      ],
+      models: finalModels,
+      customModels: customModels.map(m => m.modelId), // 标记哪些是自定义模型
       defaultModel 
     });
   } catch (error: any) {
     console.error("[Models] Error:", error);
+    
+    // 错误时返回自定义模型和默认模型
+    const customModels = getAllCustomModels();
     res.json({
       models: [
         { modelId: "claude-sonnet-4", name: "Claude Sonnet 4" },
-        { modelId: "claude-opus-4", name: "Claude Opus 4" }
+        { modelId: "claude-opus-4", name: "Claude Opus 4" },
+        ...customModels.map(m => ({
+          modelId: m.modelId,
+          name: m.name,
+          description: m.description,
+        }))
       ],
       defaultModel,
       error: error?.message || String(error)
@@ -601,6 +636,7 @@ app.post("/api/sessions", (req, res) => {
       id: uuidv4(),
       title,
       model,
+      sdk_session_id: null,
       created_at: now,
       updated_at: now
     });
@@ -716,6 +752,117 @@ app.post("/api/chat", async (req, res) => {
   }
 
   const selectedModel = model || session.model;
+  
+  // 检查是否是 Ollama 模型：通过 provider 字段或模型名称判断
+  const customModels = getAllCustomModels();
+  const customModel = customModels.find(m => m.modelId === selectedModel);
+  const isOllamaModel = customModel?.provider === 'ollama' || 
+                        selectedModel.toLowerCase().includes('ollama') ||
+                        (process.env.OLLAMA_MODEL && selectedModel === process.env.OLLAMA_MODEL);
+  
+  if (isOllamaModel) {
+    // 使用 Ollama 处理请求
+    console.log(`[Chat] 使用 Ollama 模型: ${selectedModel}`);
+    
+    // 设置 SSE 头
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    
+    const userMessageId = uuidv4();
+    const assistantMessageId = uuidv4();
+    
+    // 保存用户消息
+    try {
+      db.createMessage({
+        id: userMessageId,
+        session_id: session.id,
+        role: 'user',
+        content: message,
+        model: null,
+        created_at: now,
+        tool_calls: null
+      });
+    } catch (dbError: any) {
+      console.error(`[Chat] 保存用户消息失败:`, dbError);
+      return res.status(500).json({ error: "保存消息失败", detail: dbError?.message });
+    }
+    
+    // 发送初始化信息
+    res.write(`data: ${JSON.stringify({ 
+      type: "init", 
+      sessionId: session.id, 
+      userMessageId, 
+      assistantMessageId,
+      model: selectedModel 
+    })}\n\n`);
+    
+    try {
+      // 获取历史消息以支持多轮对话
+      const historyMessages = db.getMessagesBySession(session.id);
+      const ollamaMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [
+        { role: 'system', content: systemPrompt || "你是一个专业的AI助手，善于帮助用户解决各种问题。请用简洁清晰的方式回答问题。" }
+      ];
+      
+      // 添加历史消息（最近10条）
+      const recentHistory = historyMessages.slice(-10);
+      for (const msg of recentHistory) {
+        if (msg.role === 'user' || msg.role === 'assistant') {
+          ollamaMessages.push({
+            role: msg.role,
+            content: msg.content
+          });
+        }
+      }
+      
+      // 添加当前消息
+      ollamaMessages.push({ role: 'user', content: message });
+      
+      let fullResponse = "";
+      
+      // 调用 Ollama 流式接口
+      await ollama.chatCompletion(
+        ollamaMessages,
+        {
+          stream: true,
+          onChunk: (chunk) => {
+            fullResponse += chunk;
+            res.write(`data: ${JSON.stringify({ type: "text", content: chunk })}\n\n`);
+          }
+        }
+      );
+      
+      // 保存助手消息
+      db.createMessage({
+        id: assistantMessageId,
+        session_id: session.id,
+        role: 'assistant',
+        content: fullResponse,
+        model: selectedModel,
+        created_at: new Date().toISOString(),
+        tool_calls: null
+      });
+      
+      // 更新会话标题
+      const messages = db.getMessagesBySession(session.id);
+      if (messages.length <= 2) {
+        db.updateSession(session.id, { 
+          title: message.slice(0, 30) + (message.length > 30 ? '...' : ''),
+          model: selectedModel
+        });
+      }
+      
+      res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+      res.end();
+      console.log(`[Chat] Ollama 请求完成 ✓`);
+    } catch (error: any) {
+      console.error(`[Chat] Ollama 错误:`, error);
+      res.write(`data: ${JSON.stringify({ type: "error", message: error?.message || "Ollama 调用失败" })}\n\n`);
+      res.end();
+    }
+    
+    return;  // Ollama 处理完成，直接返回
+  }
   
   // 获取 SDK session ID（用于恢复对话）
   const sdkSessionId = session.sdk_session_id;
@@ -900,32 +1047,6 @@ app.post("/api/chat", async (req, res) => {
             }
           }
         }
-      } else if (msg.type === "tool_result") {
-        // 处理工具结果（独立的消息类型）
-        const msgAny = msg as any;
-        const toolId = msgAny.tool_use_id || currentToolId;
-        const isError = msgAny.is_error || false;
-        const content = msgAny.content;
-        
-        console.log(`[Stream] Tool result: tool_use_id=${toolId}, is_error=${isError}`);
-        console.log(`[Stream] Tool result content type:`, typeof content);
-        console.log(`[Stream] Tool result content:`, typeof content === 'string' ? content.slice(0, 500) : JSON.stringify(content, null, 2)?.slice(0, 500));
-        
-        const tool = toolCalls.find(t => t.id === toolId) || toolCalls[toolCalls.length - 1];
-        if (tool) {
-          tool.status = isError ? "error" : "completed";
-          tool.isError = isError;
-          tool.result = typeof content === 'string' 
-            ? content 
-            : JSON.stringify(content);
-          res.write(`data: ${JSON.stringify({ 
-            type: "tool_result", 
-            toolId: tool.id, 
-            content: tool.result,
-            isError: isError
-          })}\n\n`);
-        }
-        currentToolId = null;
       } else if (msg.type === "result") {
         // 完成时确保所有工具都标记为完成
         toolCalls.forEach(tool => {
@@ -934,7 +1055,8 @@ app.post("/api/chat", async (req, res) => {
             res.write(`data: ${JSON.stringify({ type: "tool_result", toolId: tool.id, content: tool.result || "已完成" })}\n\n`);
           }
         });
-        res.write(`data: ${JSON.stringify({ type: "done", duration: msg.duration, cost: msg.cost })}\n\n`);
+        const msgAny = msg as any;
+        res.write(`data: ${JSON.stringify({ type: "done", duration: msgAny.duration_ms, cost: msgAny.total_cost_usd })}\n\n`);
       }
     }
 

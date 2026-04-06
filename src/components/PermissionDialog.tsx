@@ -1,4 +1,5 @@
 import { Dialog, Button, Tag, Descriptions } from 'tdesign-react';
+const { DescriptionsItem } = Descriptions;
 import { 
   TerminalIcon, 
   FileIcon, 
@@ -114,7 +115,6 @@ export function PermissionDialog({ visible, request, onAllow, onDeny }: Permissi
           <Tag 
             theme="primary" 
             variant="light"
-            icon={toolConfig.icon}
           >
             {toolConfig.label}
           </Tag>
@@ -150,25 +150,13 @@ export function PermissionDialog({ visible, request, onAllow, onDeny }: Permissi
             </div>
           ) : inputItems.length > 0 ? (
             // 其他工具使用描述列表
-            <Descriptions 
-              column={1} 
-              itemStyle={{ 
-                paddingBottom: '8px'
-              }}
-              labelStyle={{
-                width: '80px',
-                color: 'var(--td-text-color-secondary)'
-              }}
-              contentStyle={{
-                fontFamily: 'monospace',
-                fontSize: '13px',
-                wordBreak: 'break-all'
-              }}
-            >
+            <Descriptions column={1}>
               {inputItems.map((item, index) => (
-                <Descriptions.Item key={index} label={item.label}>
-                  {item.content}
-                </Descriptions.Item>
+                <DescriptionsItem key={index} label={item.label}>
+                  <span style={{ fontFamily: 'monospace', fontSize: '13px', wordBreak: 'break-all' }}>
+                    {item.content}
+                  </span>
+                </DescriptionsItem>
               ))}
             </Descriptions>
           ) : (

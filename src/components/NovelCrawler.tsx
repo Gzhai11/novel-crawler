@@ -39,6 +39,7 @@ interface WebsiteAnalysis {
     userAgent: boolean;
     captcha: boolean;
     javascript: boolean;
+    cookie?: boolean;
     delay: number;
   };
   recommendations: string[];
@@ -492,22 +493,18 @@ export function NovelCrawler({ onSendMessage }: NovelCrawlerProps) {
               <div className="flex-1">
                 <Input
                   type="number"
-                  value={startChapter + 1}
+                  value={String(startChapter + 1)}
                   onChange={(val) => setStartChapter(Math.max(0, Number(val) - 1))}
                   label="起始章节"
-                  min={1}
-                  max={chapters.length}
                 />
               </div>
               <span className="text-gray-500">至</span>
               <div className="flex-1">
                 <Input
                   type="number"
-                  value={endChapter + 1}
+                  value={String(endChapter + 1)}
                   onChange={(val) => setEndChapter(Math.min(chapters.length - 1, Number(val) - 1))}
                   label="结束章节"
-                  min={1}
-                  max={chapters.length}
                 />
               </div>
             </div>

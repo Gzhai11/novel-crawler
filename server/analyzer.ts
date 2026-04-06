@@ -124,6 +124,7 @@ function detectEncoding($: cheerio.CheerioAPI, html: string): string {
 const CATALOG_PATTERNS = [
   // 优先级高的选择器
   '#list dd a',
+  '#list a',
   '.chapter-list a',
   '#chapters a',
   '.catalog a',
@@ -140,7 +141,6 @@ const CATALOG_PATTERNS = [
   '.chapter-ul a',
   '.chapter-item',
   'div.listmain a',
-  '#list a',
   '.zjlist a',
   
   // 表格结构
@@ -149,6 +149,19 @@ const CATALOG_PATTERNS = [
   // 卷章节结构
   '.volume .chapters a',
   '.chapter-wrap a',
+  
+  // 新增：更多常见选择器
+  '.read_chapters a',
+  '.read_list a',
+  '#chapterlist a',
+  '.list_box a',
+  '.book-chapter-list a',
+  '.chapter-list-wrap a',
+  '.chapterbar a',
+  '.article-list a',
+  '.section-list a',
+  'dl dd a',
+  'dd a',
 ];
 
 function extractCatalogSelectors($: cheerio.CheerioAPI): string[] {
@@ -156,9 +169,30 @@ function extractCatalogSelectors($: cheerio.CheerioAPI): string[] {
   
   for (const selector of CATALOG_PATTERNS) {
     const count = $(selector).length;
-    if (count > 5) {
+    if (count > 2) {  // 降低阈值，更容易匹配
       found.push(selector);
     }
+  }
+  
+  // 如果没找到，尝试智能检测
+  if (found.length === 0) {
+    console.log('[Analyzer] 常规选择器未匹配，尝试智能检测...');
+    
+    // 查找链接密度高的容器
+    const containers = $('div, section, main, ul, ol, dl');
+    containers.each((_, el) => {
+      const $container = $(el);
+      const links = $container.find('a[href]').length;
+      if (links > 10) {
+        const id = $container.attr('id');
+        const cls = $container.attr('class');
+        if (id) {
+          found.push(`#${id} a`);
+        } else if (cls) {
+          found.push(`.${cls.split(' ')[0]} a`);
+        }
+      }
+    });
   }
   
   return found;
